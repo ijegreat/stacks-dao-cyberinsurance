@@ -156,3 +156,67 @@
         (ok claim-id)
     )
 )
+
+
+;; Vote on claim
+(define-public (vote-on-claim 
+    (claim-id uint) 
+    (approve bool)
+)
+    (let 
+        (
+            (current-height (var-get current-block-height))
+            (claim 
+                (unwrap! 
+                    (map-get? claims {claim-id: claim-id}) 
+                    ERR-INVALID-CLAIM
+                )
+            )
+            (member-info 
+                (unwrap! 
+                    (map-get? insurance-pool {member: tx-sender}) 
+                    ERR-NOT-AUTHORIZED
+                )
+            )
+        )
+
+        ;; Ensure voting is still open
+        (asserts! (< current-height (get voting-end-block claim)) ERR-CLAIM-TIMEOUT)
+
+        ;; Prevent duplicate voting
+        (asserts! 
+            (not (default-to false 
+                (get voted (map-get? member-votes {member: tx-sender, claim-id: claim-id}))
+            )) 
+            ERR-ALREADY-VOTED
+        )
+
+        ;; Update votes
+        (map-set claims 
+            {claim-id: claim-id}
+            (merge claim 
+                {
+                    total-votes: (+ (get total-votes claim) u1),
+                    approved-votes: (if approve 
+                        (+ (get approved-votes claim) u1)
+                        (get approved-votes claim)
+                    )
+                }
+            )
+        )
+
+        ;; Track individual member votes
+        (map-set member-votes 
+            {member: tx-sender, claim-id: claim-id}
+            {voted: true}
+        )
+
+        (ok true)
+    )
+)
+
+
+;; Read-only function to get current block height
+(define-read-only (get-current-block-height)
+    (var-get current-block-height)
+)
