@@ -57,3 +57,102 @@
         voting-end-block: uint
     }
 )
+
+
+;; Track votes for each member on each claim
+(define-map member-votes
+    {member: principal, claim-id: uint}
+    {voted: bool}
+)
+
+;; Track total pool funds and next claim ID
+(define-data-var total-pool-funds uint u0)
+(define-data-var next-claim-id uint u1)
+
+;; Voting period constants
+(define-constant VOTING-PERIOD u144) ;; Approximately 24 hours 
+(define-constant CLAIM-EXPIRATION u1440) ;; Approximately 10 days
+
+;; Member contribution function
+(define-public (contribute (amount uint))
+    (let 
+        (
+            (current-height (var-get current-block-height))
+        )
+        (begin
+            ;; Ensure minimum contribution
+            (asserts! (> amount u0) ERR-INSUFFICIENT-FUNDS)
+
+            ;; Transfer STX to contract
+            (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+
+            ;; Update pool mapping
+            (map-set insurance-pool 
+                {member: tx-sender} 
+                {
+                    contributed-amount: amount,
+                    active-coverage: true,
+                    contribution-block: current-height
+                }
+            )
+
+            ;; Increment total pool funds
+            (var-set total-pool-funds 
+                (+ (var-get total-pool-funds) amount)
+            )
+
+            (ok true)
+        )
+    )
+)
+
+;; Submit claim function
+(define-public (submit-claim 
+    (protocol principal) 
+    (amount-requested uint)
+)
+    (let 
+        (
+            (claim-id (var-get next-claim-id))
+            (current-height (var-get current-block-height))
+            (member-info 
+                (unwrap! 
+                    (map-get? insurance-pool {member: tx-sender}) 
+                    ERR-NOT-AUTHORIZED
+                )
+            )
+            (voting-end (+ current-height VOTING-PERIOD))
+        )
+
+        ;; Ensure member has active coverage
+        (asserts! (get active-coverage member-info) ERR-NOT-AUTHORIZED)
+
+        ;; Ensure claim is submitted within coverage period
+        (asserts! 
+            (<= 
+                (- current-height (get contribution-block member-info)) 
+                CLAIM-EXPIRATION
+            ) 
+            ERR-CLAIM-TIMEOUT
+        )
+
+        ;; Create claim
+        (map-set claims 
+            {claim-id: claim-id}
+            {
+                protocol: protocol,
+                amount-requested: amount-requested,
+                total-votes: u0,
+                approved-votes: u0,
+                is-resolved: false,
+                claim-block: current-height,
+                voting-end-block: voting-end
+            }
+        )
+
+        ;; Increment next claim ID
+        (var-set next-claim-id (+ claim-id u1))
+
+        (ok claim-id)
+    )
+)
